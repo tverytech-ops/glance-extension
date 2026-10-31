@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Glance Link Preview",
+  "version": "2.0",
+  "description": "A polished, high-compatibility link preview extension inspired by Zen Browser's Glance.",
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_end"
+    }
+  ]
+}
