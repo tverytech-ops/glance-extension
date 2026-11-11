@@ -1,135 +1,151 @@
-(function () {
-  if (window.self !== window.top) return;
+(() => {
+  "use strict";
+  if (window.top !== window || document.getElementById("glance-shadow-host")) return;
 
-  let activeUrl = "";
-  let loadTimeout = null;
+  const DEFAULTS = { altClick: true, hoverAlt: false, middleClick: false, frameStripping: false, modalWidth: 88, modalHeight: 88 };
+  let prefs = { ...DEFAULTS };
+  chrome.storage.sync.get(DEFAULTS).then(v => { prefs = { ...DEFAULTS, ...v }; applySize(); });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "sync") return;
+    for (const [key, change] of Object.entries(changes)) prefs[key] = change.newValue;
+    applySize();
+  });
 
-  // Build Structured UI Elements
-  const overlay = document.createElement("div");
-  overlay.id = "glance-overlay";
-
-  overlay.innerHTML = `
-    <div id="glance-modal">
-      <div id="glance-header">
-        <div class="glance-meta">
-          <div id="glance-indicator" title="Active connection"></div>
-          <span id="glance-title">Loading preview...</span>
+  const state = { active: false, url: "", timer: 0, hoverTimer: 0, previousOverflow: "", previousFocus: null, hoverAnchor: null };
+  const host = document.createElement("div");
+  host.id = "glance-shadow-host";
+  host.style.cssText = "all:initial;position:fixed;z-index:2147483647;inset:0;pointer-events:none;";
+  const shadow = host.attachShadow({ mode: "closed" });
+  const stylesheet = document.createElement("link");
+  stylesheet.rel = "stylesheet";
+  stylesheet.href = chrome.runtime.getURL("modal.css");
+  shadow.append(stylesheet);
+  const shell = document.createElement("div");
+  shell.innerHTML = `
+    <div id="glance-overlay" aria-hidden="true">
+      <section id="glance-modal" role="dialog" aria-modal="true" aria-label="Link preview">
+        <header id="glance-header"><div class="meta"><span class="dot"></span><div class="title" id="glance-title">Loading preview</div></div>
+          <div class="actions"><button class="btn" id="glance-reload" type="button" title="Reload preview">↻ <span>Reload</span></button><button class="btn open" id="glance-open" type="button" title="Open in new tab">↗ <span>Open tab</span></button><button class="btn close" id="glance-close" type="button" title="Close preview (Esc)" aria-label="Close preview">×</button></div>
+        </header>
+        <div id="glance-body"><div class="skeleton" id="glance-skeleton"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></div>
+          <div id="glance-loading"><span class="spinner"></span><span>Loading preview…</span></div>
+          <div id="glance-message" hidden><div class="message-title">This page may not allow previews</div><div class="message-copy" id="glance-message-copy">The website may block being displayed inside another page.</div><button class="primary" id="glance-message-open" type="button">Open in new tab</button><span class="hint">Glance cannot bypass every website restriction.</span></div>
+          <iframe id="glance-frame" title="Website preview" sandbox="allow-scripts allow-forms allow-popups" referrerpolicy="strict-origin-when-cross-origin"></iframe>
         </div>
-        <div id="glance-actions">
-          <button class="glance-btn" id="glance-open-tab" title="Open in new tab">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-            Open Tab
-          </button>
-          <button class="glance-btn glance-icon-btn" id="glance-close" title="Close (Esc)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
-        </div>
-      </div>
-      <div id="glance-body-container">
-        <div id="glance-loader">
-          <div class="glance-spinner"></div>
-          <span style="font-size: 13px; color: #9ca3af;">Fetching preview...</span>
-        </div>
-        <div id="glance-error" class="hidden">
-          <h3>Unable to Embed Website</h3>
-          <p id="glance-error-msg">This target page actively restricts inline embedding or took too long to respond.</p>
-          <button class="glance-primary-btn" id="glance-fallback-tab">Open in New Tab Instead</button>
-        </div>
-        <iframe id="glance-iframe" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
-      </div>
-    </div>
-  `;
+      </section>
+    </div>`;
+  shadow.append(shell);
+  document.documentElement.append(host);
+  const $ = id => shadow.getElementById(id);
+  const overlay = $("glance-overlay"), frame = $("glance-frame"), title = $("glance-title");
+  const loading = $("glance-loading"), skeleton = $("glance-skeleton"), message = $("glance-message");
 
-  document.body.appendChild(overlay);
-
-  const iframe = overlay.querySelector("#glance-iframe");
-  const title = overlay.querySelector("#glance-title");
-  const loader = overlay.querySelector("#glance-loader");
-  const errorScreen = overlay.querySelector("#glance-error");
-  const closeBtn = overlay.querySelector("#glance-close");
-  const openTabBtn = overlay.querySelector("#glance-open-tab");
-  const fallbackTabBtn = overlay.querySelector("#glance-fallback-tab");
-
-  // Event: Intercept Alt + Click
-  document.addEventListener("click", (e) => {
-    if (!e.altKey) return;
-
-    const anchor = e.target.closest("a");
-    if (anchor && anchor.href && anchor.href.startsWith("http")) {
-      e.preventDefault();
-      e.stopPropagation();
-      openGlance(anchor.href);
+  function applySize() {
+    if (!$("glance-modal")) return;
+    $("glance-modal").style.setProperty("--glance-width", Math.max(55, Math.min(98, Number(prefs.modalWidth) || 88)) + "vw");
+    $("glance-modal").style.setProperty("--glance-height", Math.max(55, Math.min(98, Number(prefs.modalHeight) || 88)) + "vh");
+  }
+  function allowedUrl(raw) {
+    try { const u = new URL(raw, location.href); return ["http:", "https:"].includes(u.protocol) ? u.href : ""; }
+    catch (_) { return ""; }
+  }
+  function linkFrom(target) {
+    const el = target instanceof Element ? target : target?.parentElement;
+    return el?.closest("a[href]") || null;
+  }
+  function editable(target) {
+    const el = target instanceof Element ? target : target?.parentElement;
+    return !!el?.closest('input,textarea,select,button,[contenteditable=""],[contenteditable="true"],[role="textbox"],[role="button"],[data-glance-ignore]');
+  }
+  function startTimer() {
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      if (!state.active || !loading.hidden) {
+        loading.hidden = true; skeleton.hidden = true; message.hidden = false;
+        $("glance-message-copy").textContent = "The page did not finish loading in time, or the website may block embedding. Try opening it in a new tab.";
+      }
+    }, 18000);
+  }
+  function navigate(url) {
+    state.url = url;
+    title.textContent = new URL(url).hostname;
+    title.title = url;
+    loading.hidden = false; skeleton.hidden = false; message.hidden = true;
+    clearTimeout(state.timer);
+    frame.src = "about:blank";
+    requestAnimationFrame(() => { if (state.active) frame.src = url; });
+    chrome.runtime.sendMessage({ type: "GLANCE_PREVIEW_START", url }).catch(() => {});
+    startTimer();
+  }
+  function openPreview(raw) {
+    const url = allowedUrl(raw);
+    if (!url) return;
+    if (!state.active) {
+      state.previousFocus = document.activeElement;
+      state.previousOverflow = document.documentElement.style.overflow;
+      state.active = true;
+      overlay.classList.add("active"); overlay.setAttribute("aria-hidden", "false");
+      overlay.style.pointerEvents = "auto";
+      document.documentElement.style.overflow = "hidden";
+    }
+    applySize(); navigate(url); $("glance-close").focus();
+  }
+  function closePreview() {
+    if (!state.active) return;
+    state.active = false; clearTimeout(state.timer);
+    overlay.classList.remove("active"); overlay.setAttribute("aria-hidden", "true");
+    overlay.style.pointerEvents = "none";
+    document.documentElement.style.overflow = state.previousOverflow;
+    frame.src = "about:blank"; loading.hidden = true; skeleton.hidden = true; message.hidden = true;
+    chrome.runtime.sendMessage({ type: "GLANCE_PREVIEW_END" }).catch(() => {});
+    if (state.previousFocus?.isConnected) state.previousFocus.focus({ preventScroll: true });
+  }
+  function openTab() {
+    if (!state.url) return;
+    window.open(state.url, "_blank", "noopener,noreferrer");
+    closePreview();
+  }
+  $("glance-close").addEventListener("click", closePreview);
+  $("glance-open").addEventListener("click", openTab);
+  $("glance-message-open").addEventListener("click", openTab);
+  $("glance-reload").addEventListener("click", () => state.url && navigate(state.url));
+  overlay.addEventListener("click", e => { if (e.target === overlay) closePreview(); });
+  frame.addEventListener("load", () => {
+    if (!state.active) return;
+    clearTimeout(state.timer); loading.hidden = true; skeleton.hidden = true;
+    // Cross-origin load events do not prove the remote page rendered successfully.
+  });
+  document.addEventListener("click", e => {
+    if (editable(e.target) || !prefs.altClick || !e.altKey || e.button !== 0) return;
+    const a = linkFrom(e.target), url = a && allowedUrl(a.href);
+    if (!url) return;
+    e.preventDefault(); e.stopPropagation(); openPreview(url);
+  }, true);
+  document.addEventListener("auxclick", e => {
+    if (e.button !== 1 || editable(e.target) || !prefs.middleClick) return;
+    const a = linkFrom(e.target), url = a && allowedUrl(a.href);
+    if (!url) return;
+    e.preventDefault(); e.stopPropagation(); openPreview(url);
+  }, true);
+  document.addEventListener("mouseover", e => {
+    if (editable(e.target) || !prefs.hoverAlt || !e.altKey) return;
+    const a = linkFrom(e.target), url = a && allowedUrl(a.href);
+    if (!url || a === state.hoverAnchor) return;
+    state.hoverAnchor = a; clearTimeout(state.hoverTimer);
+    state.hoverTimer = setTimeout(() => openPreview(url), 550);
+  }, true);
+  document.addEventListener("mouseout", e => {
+    if (e.relatedTarget && e.target?.contains?.(e.relatedTarget)) return;
+    clearTimeout(state.hoverTimer);
+  }, true);
+  document.addEventListener("keydown", e => {
+    if (!state.active) return;
+    if (e.key === "Escape") { e.preventDefault(); closePreview(); }
+    if (e.key === "Tab") {
+      const controls = [$("glance-reload"), $("glance-open"), $("glance-close")];
+      if (e.shiftKey && shadow.activeElement === controls[0]) { e.preventDefault(); controls[2].focus(); }
+      else if (!e.shiftKey && shadow.activeElement === controls[2]) { e.preventDefault(); controls[0].focus(); }
     }
   }, true);
-
-  function openGlance(url) {
-    activeUrl = url;
-    title.textContent = url;
-    errorScreen.classList.add("hidden");
-    loader.classList.remove("hidden");
-    iframe.src = "about:blank";
-
-    overlay.classList.add("glance-active");
-    document.body.style.overflow = "hidden"; // Prevent background page scrolling
-
-    // Load URL into iframe after small tick for smooth render transition
-    setTimeout(() => {
-      iframe.src = url;
-    }, 100);
-
-    // Safety timeout: if site blocks iframe or fails to report load within 6 seconds, show error screen
-    clearTimeout(loadTimeout);
-    loadTimeout = setTimeout(() => {
-      if (overlay.classList.contains("glance-active") && !iframe.contentDocument) {
-        loader.classList.add("hidden");
-        errorScreen.classList.remove("hidden");
-      }
-    }, 6000);
-  }
-
-  iframe.addEventListener("load", () => {
-    clearTimeout(loadTimeout);
-    loader.classList.add("hidden");
-  });
-
-  function closeGlance() {
-    overlay.classList.remove("glance-active");
-    document.body.style.overflow = "";
-    clearTimeout(loadTimeout);
-    setTimeout(() => {
-      iframe.src = "about:blank";
-      errorScreen.classList.add("hidden");
-    }, 250); // Clear source after close animation completes
-  }
-
-  // Action Bindings
-  closeBtn.addEventListener("click", closeGlance);
-
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closeGlance();
-  });
-
-  // Keyboard shortcut support (Escape key or Ctrl+Backspace/Alt+W options)
-  document.addEventListener("keydown", (e) => {
-    if (!overlay.classList.contains("glance-active")) return;
-    
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeGlance();
-    }
-  });
-
-  openTabBtn.addEventListener("click", () => {
-    if (activeUrl) {
-      window.open(activeUrl, "_blank");
-      closeGlance();
-    }
-  });
-
-  fallbackTabBtn.addEventListener("click", () => {
-    if (activeUrl) {
-      window.open(activeUrl, "_blank");
-      closeGlance();
-    }
-  });
+  chrome.runtime.onMessage.addListener(m => { if (m?.type === "GLANCE_OPEN") openPreview(m.url); });
 })();
