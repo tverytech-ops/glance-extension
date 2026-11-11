@@ -2,7 +2,7 @@
   "use strict";
   if (window.top !== window || document.getElementById("glance-shadow-host")) return;
 
-  const DEFAULTS = { altClick: true, hoverAlt: false, middleClick: false, frameStripping: false, modalWidth: 88, modalHeight: 88 };
+  const DEFAULTS = { altClick: true, hoverAlt: false, modifierKey: "alt", middleClick: false, frameStripping: false, modalWidth: 88, modalHeight: 88 };
   let prefs = { ...DEFAULTS };
   chrome.storage.sync.get(DEFAULTS).then(v => { prefs = { ...DEFAULTS, ...v }; applySize(); });
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -116,7 +116,7 @@
     // Cross-origin load events do not prove the remote page rendered successfully.
   });
   document.addEventListener("click", e => {
-    if (editable(e.target) || !prefs.altClick || !e.altKey || e.button !== 0) return;
+    if (editable(e.target) || !prefs.altClick || !modifierPressed(e) || e.button !== 0) return;
     const a = linkFrom(e.target), url = a && allowedUrl(a.href);
     if (!url) return;
     e.preventDefault(); e.stopPropagation(); openPreview(url);
@@ -128,7 +128,7 @@
     e.preventDefault(); e.stopPropagation(); openPreview(url);
   }, true);
   document.addEventListener("mouseover", e => {
-    if (editable(e.target) || !prefs.hoverAlt || !e.altKey) return;
+    if (editable(e.target) || !prefs.hoverAlt || !modifierPressed(e)) return;
     const a = linkFrom(e.target), url = a && allowedUrl(a.href);
     if (!url || a === state.hoverAnchor) return;
     state.hoverAnchor = a; clearTimeout(state.hoverTimer);
@@ -147,5 +147,5 @@
       else if (!e.shiftKey && shadow.activeElement === controls[2]) { e.preventDefault(); controls[0].focus(); }
     }
   }, true);
-  chrome.runtime.onMessage.addListener(m => { if (m?.type === "GLANCE_OPEN") openPreview(m.url); });
+  chrome.runtime.onMessage.addListener(m => {\n    if (m?.type === "GLANCE_OPEN") openPreview(m.url);\n    if (m?.type === "GLANCE_PARENT_NAVIGATION") { clearTimeout(state.hoverTimer); closePreview(); }\n  });
 })();
