@@ -118,7 +118,7 @@
   $("glance-reload").addEventListener("click", () => state.url && navigate(state.url));
   overlay.addEventListener("click", e => { if (e.target === overlay) closePreview(); });
   frame.addEventListener("load", () => {
-    if (!state.active) return;
+    if (!state.active || frame.src === "about:blank") return;
     clearTimeout(state.timer); loading.hidden = true; skeleton.hidden = true;
     // Cross-origin load events do not prove the remote page rendered successfully.
   });
