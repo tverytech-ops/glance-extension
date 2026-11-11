@@ -1,0 +1,11 @@
+/* Glance MV3 service worker. CSP is intentionally never modified. */
+const RULE_ID=71001, MENU_ID="glance-preview-link";
+const DEFAULTS={altClick:true,hoverAlt:false,middleClick:false,contextMenu:true,frameStripping:false,modalWidth:88,modalHeight:88};
+async function settings(){return {...DEFAULTS,...await chrome.storage.sync.get(DEFAULTS)}}
+async function clearRule(){try{await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[RULE_ID]})}catch(e){console.warn("[Glance] Rule cleanup failed",e)}}
+async function setRule(host){await clearRule();const s=await settings();if(!s.frameStripping||!host)return;try{await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[RULE_ID],addRules:[{id:RULE_ID,priority:1,action:{type:"modifyHeaders",responseHeaders:[{header:"x-frame-options",operation:"remove"}]},condition:{requestDomains:[host],resourceTypes:["sub_frame"]}}]})}catch(e){console.warn("[Glance] Compatibility rule unavailable",e)}}
+chrome.runtime.onMessage.addListener((m,_sender,reply)=>{if(m?.type==="GLANCE_PREVIEW_START"){let host="";try{const u=new URL(m.url);if(["http:","https:"].includes(u.protocol))host=u.hostname}catch(_){}setRule(host).then(()=>reply({ok:true}));return true}if(m?.type==="GLANCE_PREVIEW_END"){clearRule().then(()=>reply({ok:true}));return true}});
+chrome.runtime.onInstalled.addListener(async()=>{const old=await chrome.storage.sync.get(null);await chrome.storage.sync.set({...DEFAULTS,...old});await chrome.contextMenus.removeAll();if((await settings()).contextMenu)chrome.contextMenus.create({id:MENU_ID,title:"Preview link with Glance",contexts:["link"]})});
+chrome.storage.onChanged.addListener(async(c,a)=>{if(a!=="sync"||!c.contextMenu)return;await chrome.contextMenus.removeAll();if(c.contextMenu.newValue)chrome.contextMenus.create({id:MENU_ID,title:"Preview link with Glance",contexts:["link"]})});
+chrome.contextMenus.onClicked.addListener((i,t)=>{if(i.menuItemId===MENU_ID&&i.linkUrl&&t?.id)chrome.tabs.sendMessage(t.id,{type:"GLANCE_OPEN",url:i.linkUrl}).catch(()=>{})});
+chrome.runtime.onStartup.addListener(clearRule);
