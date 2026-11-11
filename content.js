@@ -11,7 +11,7 @@
     applySize();
   });
 
-  const state = { active: false, url: "", timer: 0, hoverTimer: 0, previousOverflow: "", previousFocus: null, hoverAnchor: null };
+  const state = { active: false, url: "", timer: 0, hoverTimer: 0, navigationId: 0, previousOverflow: "", previousFocus: null, hoverAnchor: null };
   const host = document.createElement("div");
   host.id = "glance-shadow-host";
   host.style.cssText = "all:initial;position:fixed;z-index:2147483647;inset:0;pointer-events:none;";
@@ -66,16 +66,23 @@
       }
     }, 18000);
   }
-  function navigate(url) {
+  async function navigate(url) {
     state.url = url;
+    const navigationId = ++state.navigationId;
     title.textContent = new URL(url).hostname;
     title.title = url;
     loading.hidden = false; skeleton.hidden = false; message.hidden = true;
     clearTimeout(state.timer);
     frame.src = "about:blank";
-    requestAnimationFrame(() => { if (state.active) frame.src = url; });
-    chrome.runtime.sendMessage({ type: "GLANCE_PREVIEW_START", url }).catch(() => {});
     startTimer();
+
+    // Wait for the service worker to install the optional tab-scoped rule
+    // before assigning the iframe URL. If messaging fails, preview still works
+    // without the compatibility rule.
+    try { await chrome.runtime.sendMessage({ type: "GLANCE_PREVIEW_START", url }); }
+    catch (_) { /* Restricted or unavailable extension context: continue normally. */ }
+    if (!state.active || navigationId !== state.navigationId) return;
+    frame.src = url;
   }
   function openPreview(raw) {
     const url = allowedUrl(raw);
@@ -92,7 +99,7 @@
   }
   function closePreview() {
     if (!state.active) return;
-    state.active = false; clearTimeout(state.timer);
+    state.active = false; state.navigationId++; clearTimeout(state.timer);
     overlay.classList.remove("active"); overlay.setAttribute("aria-hidden", "true");
     overlay.style.pointerEvents = "none";
     document.documentElement.style.overflow = state.previousOverflow;
