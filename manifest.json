@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Glance Link Preview",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Preview links in a clean overlay without leaving your current page.",
-  "permissions": ["storage", "contextMenus", "declarativeNetRequest", "declarativeNetRequestWithHostAccess"],
+  "permissions": ["storage", "contextMenus", "declarativeNetRequestWithHostAccess", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "service-worker.js" },
   "options_page": "options.html",
